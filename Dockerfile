@@ -11,9 +11,9 @@ RUN npm run build
 # Stage 2: Build the Go backend
 FROM golang:1.24-alpine AS backend-builder
 WORKDIR /app
-COPY backend/ ./
+COPY . .
 RUN go mod download
-RUN CGO_ENABLED=0 GOOS=linux go build -o crypto-trading-server .
+RUN CGO_ENABLED=0 GOOS=linux go build -o crypto-trading-server ./cmd/trading
 
 # Stage 3: Final image
 FROM alpine:3.18

@@ -3,7 +3,7 @@
 # Install dependencies
 install:
 	@echo "Installing backend dependencies..."
-	cd backend && go mod tidy
+	go mod tidy
 	@echo "Installing frontend dependencies..."
 	cd frontend && npm install
 
@@ -11,21 +11,27 @@ install:
 lint-install:
 	@echo "Installing golangci-lint..."
 	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	@echo "Installing goimports..."
+	go install golang.org/x/tools/cmd/goimports@latest
 
 # Run golangci-lint
 lint:
+	@echo "Running goimports..."
+	goimports -w .
 	@echo "Running golangci-lint..."
-	cd backend && golangci-lint run ./...
+	golangci-lint run ./...
 
 # Run golangci-lint with auto-fix
 lint-fix:
+	@echo "Running goimports..."
+	goimports -w .
 	@echo "Running golangci-lint with auto-fix..."
-	cd backend && golangci-lint run --fix ./...
+	golangci-lint run --fix ./...
 
 # Run backend server
 run-backend:
 	@echo "Starting backend server..."
-	cd backend && go run main.go
+	go run main.go
 
 # Run frontend development server
 run-frontend:
