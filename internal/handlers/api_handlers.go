@@ -2,7 +2,8 @@ package handlers
 
 import (
 	"encoding/json"
-	"log"
+	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/gorilla/mux"
@@ -21,16 +22,16 @@ func NewHTTPHandler(dataService *services.DataService) *HTTPHandler {
 }
 
 func (h *HTTPHandler) RegisterRoutes(router *mux.Router) {
-	// API endpoints
+	// API endpoints.
 	router.HandleFunc("/api/pairs", h.GetTradingPairsHandler).Methods("GET")
 	router.HandleFunc("/api/candles/{symbol}", h.GetCandlesHandler).Methods("GET")
 
-	// Static files - register last to avoid intercepting other routes
+	// Static files - register last to avoid intercepting other routes.
 	fs := http.FileServer(http.Dir("./static"))
 	router.PathPrefix("/").Handler(http.StripPrefix("/", fs))
 }
 
-// GetTradingPairsHandler returns a list of trading pairs
+// GetTradingPairsHandler returns a list of trading pairs.
 func (h *HTTPHandler) GetTradingPairsHandler(w http.ResponseWriter, _ *http.Request) {
 	pairs := make([]map[string]any, 0, len(h.dataService.TradingPairs))
 
@@ -48,18 +49,18 @@ func (h *HTTPHandler) GetTradingPairsHandler(w http.ResponseWriter, _ *http.Requ
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(pairs); err != nil {
-		log.Printf("Error encoding trading pairs: %v", err)
+		slog.Error("Error encoding trading pairs", "error", err)
 	}
 }
 
-// GetCandlesHandler returns candle data for a trading pair
+// GetCandlesHandler returns candle data for a trading pair.
 func (h *HTTPHandler) GetCandlesHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	symbol := vars["symbol"]
 
 	candles, err := h.dataService.GetCandleData(symbol)
 	if err != nil {
-		if err == services.ErrTradingPairNotFound {
+		if errors.Is(err, services.ErrTradingPairNotFound) {
 			http.Error(w, "Trading pair not found", http.StatusNotFound)
 		} else {
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -67,9 +68,10 @@ func (h *HTTPHandler) GetCandlesHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	log.Printf("Sending %d candles for %s", len(candles), symbol)
+	slog.Info("Sending candles", "count", len(candles), "symbol", symbol)
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(candles); err != nil {
-		log.Printf("Error encoding candles: %v", err)
+	encodeErr := json.NewEncoder(w).Encode(candles)
+	if encodeErr != nil {
+		slog.Error("Error encoding candles", "error", encodeErr)
 	}
 }

@@ -1,7 +1,7 @@
 package handlers
 
 import (
-	"log"
+	"log/slog"
 	"net/http"
 
 	"github.com/gorilla/mux"
@@ -39,27 +39,28 @@ func (h *WebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.Reque
 
 	conn, err := h.websocketManager.Upgrade(w, r)
 	if err != nil {
-		log.Printf("Error upgrading connection: %v", err)
+		slog.Error("Error upgrading connection", "error", err)
 		return
 	}
 
-	log.Printf("New WebSocket connection for %s", symbol)
+	slog.Info("New WebSocket connection", "symbol", symbol)
 
 	// Add subscriber
 	err = h.dataService.AddSubscriber(symbol, conn)
 	if err != nil {
-		log.Printf("Error adding subscriber: %v", err)
+		slog.Error("Error adding subscriber", "error", err)
 		conn.Close()
 		return
 	}
 
-	// Handle messages from client
+	// Keep connection open and handle disconnection
 	for {
-		_, _, err := conn.ReadMessage()
-		if err != nil {
-			log.Printf("WebSocket connection closed for %s: %v", symbol, err)
-			if err := h.dataService.RemoveSubscriber(symbol, conn); err != nil {
-				log.Printf("Error removing subscriber: %v", err)
+		_, _, readErr := conn.ReadMessage()
+		if readErr != nil {
+			slog.Error("WebSocket connection closed", "symbol", symbol, "error", readErr)
+			removeErr := h.dataService.RemoveSubscriber(symbol, conn)
+			if removeErr != nil {
+				slog.Error("Error removing subscriber", "error", removeErr)
 			}
 			break
 		}

@@ -17,6 +17,14 @@ import (
 	"github.com/sand/crypto-trading-app/backend/internal/websocket"
 )
 
+// Server timeout constants.
+const (
+	readTimeoutSeconds     = 15
+	writeTimeoutSeconds    = 15
+	idleTimeoutSeconds     = 60
+	shutdownTimeoutSeconds = 5
+)
+
 func main() {
 	// Create services and components
 	dataService := services.NewDataService()
@@ -52,9 +60,9 @@ func main() {
 	srv := &http.Server{
 		Addr:         port,
 		Handler:      handler,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		ReadTimeout:  readTimeoutSeconds * time.Second,
+		WriteTimeout: writeTimeoutSeconds * time.Second,
+		IdleTimeout:  idleTimeoutSeconds * time.Second,
 	}
 
 	// Start server in a separate goroutine
@@ -72,11 +80,12 @@ func main() {
 	log.Println("Shutting down server...")
 
 	// Give 5 seconds to complete current requests
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeoutSeconds*time.Second)
 	defer cancel()
 
 	if err := srv.Shutdown(ctx); err != nil {
-		log.Fatalf("Server forced to shutdown: %v", err)
+		log.Printf("Server forced to shutdown: %v", err)
+		return
 	}
 
 	log.Println("Server exited properly")

@@ -1,10 +1,15 @@
 package websocket
 
 import (
-	"log"
+	"log/slog"
 	"net/http"
 
 	"github.com/gorilla/websocket"
+)
+
+// Buffer size constants to avoid magic numbers.
+const (
+	defaultBufferSize = 1024 // 1KB buffer size for WebSocket connections
 )
 
 type Manager struct {
@@ -14,8 +19,8 @@ type Manager struct {
 func NewWebSocketManager() *Manager {
 	return &Manager{
 		upgrader: websocket.Upgrader{
-			ReadBufferSize:  1024,
-			WriteBufferSize: 1024,
+			ReadBufferSize:  defaultBufferSize,
+			WriteBufferSize: defaultBufferSize,
 			CheckOrigin: func(_ *http.Request) bool {
 				return true // Allow connections from any origin
 			},
@@ -26,13 +31,13 @@ func NewWebSocketManager() *Manager {
 func (m *Manager) Upgrade(w http.ResponseWriter, r *http.Request) (*websocket.Conn, error) {
 	conn, err := m.upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("Error upgrading to WebSocket: %v", err)
+		slog.Error("Error upgrading to WebSocket", "error", err)
 		return nil, err
 	}
 
 	// Set handler for connection closure
 	conn.SetCloseHandler(func(code int, text string) error {
-		log.Printf("WebSocket connection closed with code %d: %s", code, text)
+		slog.Info("WebSocket connection closed", "code", code, "text", text)
 		return nil
 	})
 
