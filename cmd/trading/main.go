@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -26,13 +27,14 @@ const (
 )
 
 func main() {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	// Create services and components
-	dataService := services.NewDataService()
-	websocketManager := websocket.NewWebSocketManager()
+	dataService := services.NewDataService(logger)
+	websocketManager := websocket.NewWebSocketManager(logger)
 
 	// Create handlers
-	httpHandler := handlers.NewHTTPHandler(dataService)
-	wsHandler := handlers.NewWebSocketHandler(dataService, websocketManager)
+	httpHandler := handlers.NewHTTPHandler(logger, dataService)
+	wsHandler := handlers.NewWebSocketHandler(logger, dataService, websocketManager)
 
 	// Initialize trading pairs
 	dataService.InitializeTradingPairs()

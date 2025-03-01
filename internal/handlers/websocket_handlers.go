@@ -11,12 +11,18 @@ import (
 )
 
 type WebSocketHandler struct {
+	logger           *slog.Logger
 	dataService      *services.DataService
 	websocketManager *websocket.Manager
 }
 
-func NewWebSocketHandler(dataService *services.DataService, websocketManager *websocket.Manager) *WebSocketHandler {
+func NewWebSocketHandler(
+	logger *slog.Logger,
+	dataService *services.DataService,
+	websocketManager *websocket.Manager,
+) *WebSocketHandler {
 	return &WebSocketHandler{
+		logger:           logger,
 		dataService:      dataService,
 		websocketManager: websocketManager,
 	}
@@ -39,16 +45,16 @@ func (h *WebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.Reque
 
 	conn, err := h.websocketManager.Upgrade(w, r)
 	if err != nil {
-		slog.Error("Error upgrading connection", "error", err)
+		h.logger.Error("Error upgrading connection", "error", err)
 		return
 	}
 
-	slog.Info("New WebSocket connection", "symbol", symbol)
+	h.logger.Info("New WebSocket connection", "symbol", symbol)
 
 	// Add subscriber
 	err = h.dataService.AddSubscriber(symbol, conn)
 	if err != nil {
-		slog.Error("Error adding subscriber", "error", err)
+		h.logger.Error("Error adding subscriber", "error", err)
 		conn.Close()
 		return
 	}
@@ -57,10 +63,10 @@ func (h *WebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.Reque
 	for {
 		_, _, readErr := conn.ReadMessage()
 		if readErr != nil {
-			slog.Error("WebSocket connection closed", "symbol", symbol, "error", readErr)
+			h.logger.Error("WebSocket connection closed", "symbol", symbol, "error", readErr)
 			removeErr := h.dataService.RemoveSubscriber(symbol, conn)
 			if removeErr != nil {
-				slog.Error("Error removing subscriber", "error", removeErr)
+				h.logger.Error("Error removing subscriber", "error", removeErr)
 			}
 			break
 		}

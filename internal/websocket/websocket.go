@@ -14,9 +14,10 @@ const (
 
 type Manager struct {
 	upgrader websocket.Upgrader
+	logger   *slog.Logger
 }
 
-func NewWebSocketManager() *Manager {
+func NewWebSocketManager(logger *slog.Logger) *Manager {
 	return &Manager{
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  defaultBufferSize,
@@ -25,19 +26,20 @@ func NewWebSocketManager() *Manager {
 				return true // Allow connections from any origin
 			},
 		},
+		logger: logger,
 	}
 }
 
 func (m *Manager) Upgrade(w http.ResponseWriter, r *http.Request) (*websocket.Conn, error) {
 	conn, err := m.upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		slog.Error("Error upgrading to WebSocket", "error", err)
+		m.logger.Error("Error upgrading to WebSocket", "error", err)
 		return nil, err
 	}
 
 	// Set handler for connection closure
 	conn.SetCloseHandler(func(code int, text string) error {
-		slog.Info("WebSocket connection closed", "code", code, "text", text)
+		m.logger.Info("WebSocket connection closed", "code", code, "text", text)
 		return nil
 	})
 

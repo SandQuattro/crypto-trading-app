@@ -12,11 +12,13 @@ import (
 )
 
 type HTTPHandler struct {
+	logger      *slog.Logger
 	dataService *services.DataService
 }
 
-func NewHTTPHandler(dataService *services.DataService) *HTTPHandler {
+func NewHTTPHandler(logger *slog.Logger, dataService *services.DataService) *HTTPHandler {
 	return &HTTPHandler{
+		logger:      logger,
 		dataService: dataService,
 	}
 }
@@ -49,7 +51,7 @@ func (h *HTTPHandler) GetTradingPairsHandler(w http.ResponseWriter, _ *http.Requ
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(pairs); err != nil {
-		slog.Error("Error encoding trading pairs", "error", err)
+		h.logger.Error("Error encoding trading pairs", "error", err)
 	}
 }
 
@@ -68,10 +70,10 @@ func (h *HTTPHandler) GetCandlesHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	slog.Info("Sending candles", "count", len(candles), "symbol", symbol)
+	h.logger.Info("Sending candles", "count", len(candles), "symbol", symbol)
 	w.Header().Set("Content-Type", "application/json")
 	encodeErr := json.NewEncoder(w).Encode(candles)
 	if encodeErr != nil {
-		slog.Error("Error encoding candles", "error", encodeErr)
+		h.logger.Error("Error encoding candles", "error", encodeErr)
 	}
 }

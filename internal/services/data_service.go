@@ -2,7 +2,6 @@ package services
 
 import (
 	"crypto/rand"
-	"errors"
 	"log/slog"
 	"math"
 	"math/big"
@@ -59,11 +58,13 @@ const (
 
 type DataService struct {
 	TradingPairs map[string]*models.TradingPair
+	logger       *slog.Logger
 }
 
-func NewDataService() *DataService {
+func NewDataService(logger *slog.Logger) *DataService {
 	return &DataService{
 		TradingPairs: make(map[string]*models.TradingPair),
+		logger:       logger,
 	}
 }
 
@@ -80,13 +81,13 @@ func NewTradingPair(symbol string, initialPrice float64) *models.TradingPair {
 }
 
 // secureFloat64 generates a random number from 0 to 1 using crypto/rand.
-func secureFloat64() float64 {
+func secureFloat64(logger *slog.Logger) float64 {
 	// Generate a random number from 0 to 1<<53
 	maxVal := big.NewInt(1 << maxRandomBits)
 	n, err := rand.Int(rand.Reader, maxVal)
 	if err != nil {
 		// In case of error, return 0.5 as a safe default value
-		slog.Error("Error generating secure random number", "error", err)
+		logger.Error("Error generating secure random number", "error", err)
 		return defaultRandomValue
 	}
 	// Convert to float64 from 0 to 1
@@ -135,20 +136,20 @@ func (s *DataService) GenerateInitialCandleData(pair *models.TradingPair) {
 		candleTime := startTime.Add(time.Duration(i) * minutesPerCandle * time.Minute)
 
 		// Create a small price change for each candle
-		priceChange := basePrice * (secureFloat64()*maxPriceVariationPercent -
+		priceChange := basePrice * (secureFloat64(s.logger)*maxPriceVariationPercent -
 			minPriceVariationPercent) // -2% to +2%
 		basePrice += priceChange
 
 		// Create candle with random fluctuations
 		openPrice := basePrice * (openCloseVariationBase +
-			secureFloat64()*openCloseVariationRange)
+			secureFloat64(s.logger)*openCloseVariationRange)
 		closePrice := basePrice * (openCloseVariationBase +
-			secureFloat64()*openCloseVariationRange)
+			secureFloat64(s.logger)*openCloseVariationRange)
 		high := math.Max(openPrice, closePrice) * (highPriceVariationBase +
-			secureFloat64()*highPriceVariationRange)
+			secureFloat64(s.logger)*highPriceVariationRange)
 		low := math.Min(openPrice, closePrice) * (lowPriceVariationBase -
-			secureFloat64()*lowPriceVariationRange)
-		volume := defaultVolume + secureFloat64()*maxVolumeVariation
+			secureFloat64(s.logger)*lowPriceVariationRange)
+		volume := defaultVolume + secureFloat64(s.logger)*maxVolumeVariation
 
 		candle := models.CandleData{
 			Time:   candleTime.Unix() * timestampMultiplier, // milliseconds
@@ -168,15 +169,134 @@ func (s *DataService) GenerateInitialCandleData(pair *models.TradingPair) {
 		pair.LastPrice = pair.LastCandle.Close
 	}
 
-	slog.Info("Generated candles", "symbol", pair.Symbol, "count", len(pair.CandleData))
+	s.logger.Info("Generated candles", "symbol", pair.Symbol, "count", len(pair.CandleData))
 }
 
-// SimulateTradingData simulates trading data for a pair in real-time.
+// updatePriceAndCandle updates the current price and candle data.
+func (s *DataService) updatePriceAndCandle(
+	pair *models.TradingPair,
+	currentCandle *models.CandleData,
+) {
+	pair.Mutex.Lock()
+	defer pair.Mutex.Unlock()
+
+	// -0.2% to +0.2%
+	priceChange := pair.LastPrice * (secureFloat64(s.logger)*realtimePriceVariationMax -
+		realtimePriceVariationMin)
+	pair.LastPrice += priceChange
+
+	// Update current candle
+	if pair.LastPrice > currentCandle.High {
+		currentCandle.High = pair.LastPrice
+	}
+	if pair.LastPrice < currentCandle.Low {
+		currentCandle.Low = pair.LastPrice
+	}
+	currentCandle.Close = pair.LastPrice
+	currentCandle.Volume += secureFloat64(s.logger) * smallVolumeVariation // Small increase in volume
+
+	// Update last candle
+	pair.LastCandle = *currentCandle
+
+	if len(pair.CandleData) > 0 {
+		// Calculate % change from first candle
+		pair.PriceChange = (pair.LastPrice/pair.CandleData[0].Open - 1) *
+			percentMultiplier
+	}
+}
+
+// createNewCandle creates a new candle and adds the current one to history.
+func (s *DataService) createNewCandle(
+	pair *models.TradingPair,
+	currentCandle *models.CandleData,
+	roundedTime time.Time,
+) {
+	pair.Mutex.Lock()
+	defer pair.Mutex.Unlock()
+
+	// Save current candle to history
+	if len(pair.CandleData) == 0 || currentCandle.Time > pair.CandleData[len(pair.CandleData)-1].Time {
+		pair.CandleData = append(pair.CandleData, *currentCandle)
+		// Keep only last 288 candles
+		if len(pair.CandleData) > maxCandleCount {
+			pair.CandleData = pair.CandleData[len(pair.CandleData)-maxCandleCount:]
+		}
+		s.logger.Info("Created new candle for pair", "symbol", pair.Symbol,
+			"time", time.Unix(currentCandle.Time/timestampMultiplier, 0))
+	}
+
+	// Create a new current candle
+	*currentCandle = models.CandleData{
+		Time:   roundedTime.Unix() * timestampMultiplier,
+		Open:   pair.LastPrice,
+		High:   pair.LastPrice,
+		Low:    pair.LastPrice,
+		Close:  pair.LastPrice,
+		Volume: defaultVolume + secureFloat64(s.logger)*smallVolumeVariation,
+	}
+
+	// Update last candle
+	pair.LastCandle = *currentCandle
+}
+
+// getRoundedTime returns a time rounded to the demonstration interval.
+func getRoundedTime() time.Time {
+	now := time.Now()
+	// Use a 10-second interval for demonstration
+	return time.Date(
+		now.Year(), now.Month(), now.Day(),
+		now.Hour(), now.Minute(), now.Second()/demoIntervalSeconds*demoIntervalSeconds, 0,
+		now.Location(),
+	)
+}
+
+// initializeCurrentCandle gets or creates the current candle.
+func (s *DataService) initializeCurrentCandle(
+	pair *models.TradingPair,
+) models.CandleData {
+	pair.Mutex.RLock()
+	defer pair.Mutex.RUnlock()
+
+	if len(pair.CandleData) > 0 {
+		return pair.CandleData[len(pair.CandleData)-1]
+	}
+
+	roundedTime := getRoundedTime()
+	return models.CandleData{
+		Time:   roundedTime.Unix() * timestampMultiplier,
+		Open:   pair.LastPrice,
+		High:   pair.LastPrice,
+		Low:    pair.LastPrice,
+		Close:  pair.LastPrice,
+		Volume: defaultVolume,
+	}
+}
+
+// handlePriceUpdate handles the price ticker update.
+func (s *DataService) handlePriceUpdate(pair *models.TradingPair, currentCandle *models.CandleData) {
+	s.updatePriceAndCandle(pair, currentCandle)
+	s.BroadcastUpdate(pair)
+}
+
+// handleCandleUpdate handles the candle ticker update.
+func (s *DataService) handleCandleUpdate(pair *models.TradingPair, currentCandle *models.CandleData) {
+	roundedTime := getRoundedTime()
+
+	// Check if we need to create a new candle
+	if roundedTime.Unix()*timestampMultiplier > currentCandle.Time {
+		s.createNewCandle(pair, currentCandle, roundedTime)
+		s.BroadcastUpdate(pair)
+	}
+}
+
+// SimulateTradingData simulates real-time trading data for a pair.
 func (s *DataService) SimulateTradingData(pair *models.TradingPair) {
 	// Ticker for price updates (every 500ms)
 	priceTicker := time.NewTicker(time.Duration(priceUpdateInterval) * time.Millisecond)
 	// Ticker for new candles (every 1 second)
 	candleTicker := time.NewTicker(candleTickerInterval * time.Second)
+	defer priceTicker.Stop()
+	defer candleTicker.Stop()
 
 	// Ensure we have candle data
 	pair.Mutex.RLock()
@@ -184,115 +304,22 @@ func (s *DataService) SimulateTradingData(pair *models.TradingPair) {
 	pair.Mutex.RUnlock()
 
 	if !hasData {
-		slog.Info("Generating initial candle data for pair in simulateTradingData",
+		s.logger.Info("Generating initial candle data for pair in simulateTradingData",
 			"symbol", pair.Symbol)
 		s.GenerateInitialCandleData(pair)
 	}
 
 	// Current candle
-	var currentCandle models.CandleData
-	pair.Mutex.RLock()
-	if len(pair.CandleData) > 0 {
-		currentCandle = pair.CandleData[len(pair.CandleData)-1]
-	} else {
-		now := time.Now()
-		// Use a 10-second interval for demonstration
-		roundedTime := time.Date(
-			now.Year(), now.Month(), now.Day(),
-			now.Hour(), now.Minute(), now.Second()/demoIntervalSeconds*demoIntervalSeconds, 0,
-			now.Location(),
-		)
-		currentCandle = models.CandleData{
-			Time:   roundedTime.Unix() * timestampMultiplier,
-			Open:   pair.LastPrice,
-			High:   pair.LastPrice,
-			Low:    pair.LastPrice,
-			Close:  pair.LastPrice,
-			Volume: defaultVolume,
-		}
-	}
-	pair.Mutex.RUnlock()
+	currentCandle := s.initializeCurrentCandle(pair)
 
 	for {
 		select {
 		case <-pair.StopChan:
-			priceTicker.Stop()
-			candleTicker.Stop()
 			return
-
 		case <-priceTicker.C:
-			// Update price with small random change
-			pair.Mutex.Lock()
-			// -0.2% to +0.2%
-			priceChange := pair.LastPrice * (secureFloat64()*realtimePriceVariationMax -
-				realtimePriceVariationMin)
-			pair.LastPrice += priceChange
-
-			// Update current candle
-			if pair.LastPrice > currentCandle.High {
-				currentCandle.High = pair.LastPrice
-			}
-			if pair.LastPrice < currentCandle.Low {
-				currentCandle.Low = pair.LastPrice
-			}
-			currentCandle.Close = pair.LastPrice
-			currentCandle.Volume += secureFloat64() * smallVolumeVariation // Small increase in volume
-
-			// Update last candle
-			pair.LastCandle = currentCandle
-
-			if len(pair.CandleData) > 0 {
-				// Calculate % change from first candle
-				pair.PriceChange = (pair.LastPrice/pair.CandleData[0].Open - 1) *
-					percentMultiplier
-			}
-			pair.Mutex.Unlock()
-
-			// Broadcast update
-			s.BroadcastUpdate(pair)
-
+			s.handlePriceUpdate(pair, &currentCandle)
 		case <-candleTicker.C:
-			now := time.Now()
-			// Use a 10-second interval for demonstration
-			roundedTime := time.Date(
-				now.Year(), now.Month(), now.Day(),
-				now.Hour(), now.Minute(), now.Second()/demoIntervalSeconds*demoIntervalSeconds, 0,
-				now.Location(),
-			)
-
-			// Check if we need to create a new candle
-			if roundedTime.Unix()*timestampMultiplier > currentCandle.Time {
-				pair.Mutex.Lock()
-
-				// Save current candle to history
-				if len(pair.CandleData) == 0 || currentCandle.Time > pair.CandleData[len(pair.CandleData)-1].Time {
-					pair.CandleData = append(pair.CandleData, currentCandle)
-					// Keep only last 288 candles
-					if len(pair.CandleData) > maxCandleCount {
-						pair.CandleData = pair.CandleData[len(pair.CandleData)-maxCandleCount:]
-					}
-					slog.Info("Created new candle for pair", "symbol", pair.Symbol,
-						"time", time.Unix(currentCandle.Time/timestampMultiplier, 0))
-				}
-
-				// Create a new current candle
-				currentCandle = models.CandleData{
-					Time:   roundedTime.Unix() * timestampMultiplier,
-					Open:   pair.LastPrice,
-					High:   pair.LastPrice,
-					Low:    pair.LastPrice,
-					Close:  pair.LastPrice,
-					Volume: defaultVolume + secureFloat64()*smallVolumeVariation,
-				}
-
-				// Update last candle
-				pair.LastCandle = currentCandle
-
-				pair.Mutex.Unlock()
-
-				// Broadcast update
-				s.BroadcastUpdate(pair)
-			}
+			s.handleCandleUpdate(pair, &currentCandle)
 		}
 	}
 }
@@ -319,7 +346,7 @@ func (s *DataService) BroadcastUpdate(pair *models.TradingPair) {
 	for conn := range pair.Subscribers {
 		err := conn.WriteJSON(update)
 		if err != nil {
-			slog.Error("Error sending update to subscriber", "error", err)
+			s.logger.Error("Error sending update to subscriber", "error", err)
 			conn.Close()
 			delete(pair.Subscribers, conn)
 		}
@@ -330,7 +357,7 @@ func (s *DataService) BroadcastUpdate(pair *models.TradingPair) {
 func (s *DataService) GetCandleData(symbol string) ([]models.CandleData, error) {
 	pair, ok := s.TradingPairs[symbol]
 	if !ok {
-		return nil, errors.New("trading pair not found")
+		return nil, ErrTradingPairNotFound
 	}
 
 	pair.Mutex.RLock()
@@ -353,7 +380,7 @@ func (s *DataService) AddSubscriber(symbol string, conn *websocket.Conn) error {
 	pair.Mutex.Lock()
 	defer pair.Mutex.Unlock()
 	pair.Subscribers[conn] = true
-	slog.Info("Added subscriber for pair", "symbol", symbol, "totalSubscribers", len(pair.Subscribers))
+	s.logger.Info("Added subscriber for pair", "symbol", symbol, "totalSubscribers", len(pair.Subscribers))
 	return nil
 }
 
@@ -367,6 +394,6 @@ func (s *DataService) RemoveSubscriber(symbol string, conn *websocket.Conn) erro
 	pair.Mutex.Lock()
 	defer pair.Mutex.Unlock()
 	delete(pair.Subscribers, conn)
-	slog.Info("Removed subscriber for pair", "symbol", symbol, "remainingSubscribers", len(pair.Subscribers))
+	s.logger.Info("Removed subscriber for pair", "symbol", symbol, "remainingSubscribers", len(pair.Subscribers))
 	return nil
 }
